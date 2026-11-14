@@ -1,0 +1,53 @@
+name: Remove seat finder after the exam
+on:
+  schedule:
+    - cron: "35 19 * * *"        # every night at 01:05 IST
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the expiry date in index.html
+        id: check
+        run: |
+          python3 - <<'EOF'
+          import datetime as dt, html, os, re
+          page = open("index.html", encoding="utf-8").read()
+          m = re.search(r'name="seatplan-expires" content="(\d{4}-\d{2}-\d{2})"', page)
+          today = (dt.datetime.utcnow() + dt.timedelta(hours=5, minutes=30)).date()
+          gone = bool(m) and today >= dt.date.fromisoformat(m.group(1))
+          if gone:
+              inst = re.search(r'name="seatplan-institute" content="([^"]*)"', page)
+              inst = inst.group(1) if inst else ""
+              open("index.html", "w", encoding="utf-8").write(
+                  '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                  '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                  '<meta name="seatplan-status" content="removed">'
+                  '<title>Find your exam seat</title><style>body{margin:0;font-family:'
+                  'system-ui,sans-serif}main{max-width:440px;margin:0 auto;padding:32px 16px}'
+                  'h1{font-size:20px}p{color:#888780;line-height:1.5}</style></head><body><main>'
+                  '<h1>Find your exam seat</h1><p>' + inst + '</p><p>No exam seating is '
+                  'published at present. Please check the notice board or ask the exam cell.'
+                  '</p></main></body></html>')
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"gone={'yes' if gone else 'no'}\n")
+          print("expires:", m.group(1) if m else "-", "today:", today, "remove:", gone)
+          EOF
+      - name: Replace the page and the history
+        if: steps.check.outputs.gone == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "seat-finder-bot"
+          git config user.email "seat-finder-bot@users.noreply.github.com"
+          git checkout --orphan fresh
+          git add -A
+          git commit -m "Seat finder removed after the exam"
+          git push --force origin fresh:${{ github.ref_name }}
+          curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pages/builds || true
